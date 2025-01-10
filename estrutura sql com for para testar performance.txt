@@ -1,0 +1,94 @@
+-- Loop para os 15 casos
+DECLARE @Total_vencimentoOperacaoRendaFixa AS INT;
+DECLARE @Total_processado_sucesso_vencimentoOperacaoRendaFixa AS INT;
+DECLARE @Total_pendente_processamento_VencimentoOperacaoRendaFixa AS INT;
+DECLARE @Total_processados_com_erro_vencimentoOperacaoRendaFixa AS INT;
+
+-- Adicione as entradas específicas de NOM_FILR e DESCRICAO_FILA
+DECLARE @FILAS TABLE (
+    DescricaoFila VARCHAR(100),
+    NOM_FILR VARCHAR(100),
+    Ordem INT
+);
+
+INSERT INTO @FILAS VALUES
+('Vencimento', 'FR6.VencimentoOperacaoRendaFixa', 1),
+('Ativo Cadastrado', 'FJ4.AtivoCadastrado', 2),
+('Ativo Cadastrado', 'EW8.AtivoCadastrado', 3),
+('Negociação Renda Fixa Boletada', 'FJ4.NegociacaoRendaFixaBoletada', 4),
+('Negociação Renda Fixa Cancelada', 'FJ4.NegociacaoRendaFixaCancelada', 5),
+('Atualização Situação Bloqueio e Desbloqueio', 'FJ4.AtualizacaoSituacaoBloqueioAtivoBoletada', 6),
+('Posição Consolidada Renda Fixa Atualizada', 'FR6.PosicaoConsolidadaRendaFixaAtualizada', 7),
+('Posição Operação Renda Fixa Atualizada', 'FR6.PosicaoOperacaoRendaFixaAtualizada', 8),
+('Negociação BE Cancelado', 'BE.NegociacaoCancelado', 9),
+('Saldo Solicitado', 'NU.SaldoSolicitado', 10),
+('Retorno Saldo Solicitado', 'NU.RetornoSaldoSolicitado', 11),
+('Bloqueio Judicial Solicitado', 'NU.BloqueioJudicialSolicitado', 12),
+('Desbloqueio Judicial Solicitado', 'NU.DesbloqueioJudicialSolicitado', 13),
+('Negociação Renda Fixa Processada', 'HI5.BoletoCreditoPrivadoProcessado', 14),
+('Negociação Cancelada Renda Fixa', 'HI5.BoletoCreditoPrivadoCancelado', 15);
+
+-- Loop para cada entrada
+DECLARE @DescricaoFila VARCHAR(100), @NOM_FILR VARCHAR(100), @Ordem INT;
+
+DECLARE fila_cursor CURSOR FOR
+SELECT DescricaoFila, NOM_FILR, Ordem FROM @FILAS;
+
+OPEN fila_cursor;
+
+FETCH NEXT FROM fila_cursor INTO @DescricaoFila, @NOM_FILR, @Ordem;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Total registros
+    SET @Total_vencimentoOperacaoRendaFixa = (SELECT COUNT(1)
+        FROM utilitario.TBFR6002_CTRL_MSGR (NOLOCK) TR
+        WHERE 
+            (TR.DAT_HOR_INCU >= @DATABASE_START_DATE OR @DATABASE_START_DATE IS NULL) AND 
+            (TR.DAT_HOR_INCU < @DATABASE_END_DATE OR @DATABASE_END_DATE IS NULL) AND 
+            TR.NOM_FILR = @NOM_FILR);
+
+    -- Pendente de processamento
+    SET @Total_pendente_processamento_VencimentoOperacaoRendaFixa = (SELECT COUNT(1)
+        FROM utilitario.TBFR6002_CTRL_MSGR (NOLOCK) PP
+        WHERE 
+            (PP.DAT_HOR_INCU >= @DATABASE_START_DATE OR @DATABASE_START_DATE IS NULL) AND 
+            (PP.DAT_HOR_INCU < @DATABASE_END_DATE OR @DATABASE_END_DATE IS NULL) AND
+            PP.NOM_FILR = @NOM_FILR AND
+            PP.DAT_HOR_PSST IS NULL AND
+            PP.DAT_HOR_ERRO IS NULL AND
+            PP.DAT_HOR_EXCU IS NULL);
+
+    -- Processados com erro
+    SET @Total_processados_com_erro_vencimentoOperacaoRendaFixa = (SELECT COUNT(1)
+        FROM utilitario.TBFR6002_CTRL_MSGR (NOLOCK) PP
+        WHERE 
+            (PP.DAT_HOR_INCU >= @DATABASE_START_DATE OR @DATABASE_START_DATE IS NULL) AND 
+            (PP.DAT_HOR_INCU < @DATABASE_END_DATE OR @DATABASE_END_DATE IS NULL) AND
+            PP.NOM_FILR = @NOM_FILR AND
+            PP.DAT_HOR_PSST IS NULL AND
+            PP.DAT_HOR_ERRO IS NOT NULL AND
+            PP.DAT_HOR_EXCU IS NULL);
+
+    /* Select para agrupar todas as informações das filas */
+    INSERT INTO #MONITORACAO_FILAS_MSG
+    SELECT 
+        @NOM_FILR,
+        @DescricaoFila,
+        'RF',
+        ISNULL(@Total_vencimentoOperacaoRendaFixa, 0),
+        ISNULL(@Total_processado_sucesso_vencimentoOperacaoRendaFixa, 0),
+        ISNULL(@Total_pendente_processamento_VencimentoOperacaoRendaFixa, 0),
+        ISNULL(@Total_processados_com_erro_vencimentoOperacaoRendaFixa, 0),
+        @Ordem;
+
+    FETCH NEXT FROM fila_cursor INTO @DescricaoFila, @NOM_FILR, @Ordem;
+END;
+
+CLOSE fila_cursor;
+DEALLOCATE fila_cursor;
+
+SELECT * FROM #MONITORACAO_FILAS_MSG;
+
+-- Excluindo tabela temporária
+DROP TABLE #MONITORACAO_FILAS_MSG;
