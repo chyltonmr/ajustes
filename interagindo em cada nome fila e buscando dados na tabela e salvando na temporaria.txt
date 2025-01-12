@@ -1,0 +1,92 @@
+
+
+
+Para cada "NOM_FILR" inserido em "@FILAS", quero busque dados na tabela 
+"utilitario.TBFR6002_CTRL_MSGR" um por vez utilizando ponteiro e armazene 
+os resultados em uma tabela temporária chamada "#TBFR6002_CTRL_MSGR". 
+Após isso, na etapa "Total registros", troque a pesquisa de dados da tabela
+ "utilitario.TBFR6002_CTRL_MSGR" para a temporária "#TBFR6002_CTRL_MSGR" , 
+ pois assim acredito que teremos mais performance na consulta de dados no passo 
+ "Total registros".
+ 
+ -- Declaração da tabela temporária
+CREATE TABLE #TBFR6002_CTRL_MSGR (
+    DAT_HOR_INCU DATETIME,
+    DAT_HOR_PSST DATETIME NULL,
+    DAT_HOR_ERRO DATETIME NULL,
+    DAT_HOR_EXCU DATETIME NULL,
+    NOM_FILR VARCHAR(100)
+);
+
+-- Declaração do cursor para iterar sobre @FILAS
+DECLARE fila_cursor CURSOR FOR
+SELECT NOM_FILR FROM @FILAS;
+
+DECLARE @CurrentNOM_FILR VARCHAR(100);
+
+OPEN fila_cursor;
+
+FETCH NEXT FROM fila_cursor INTO @CurrentNOM_FILR;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Inserir os dados do NOM_FILR atual na tabela temporária
+    INSERT INTO #TBFR6002_CTRL_MSGR
+    SELECT 
+        DAT_HOR_INCU, DAT_HOR_PSST, DAT_HOR_ERRO, DAT_HOR_EXCU, NOM_FILR
+    FROM utilitario.TBFR6002_CTRL_MSGR (NOLOCK)
+     WHERE 
+        NOM_FILR = @CurrentNOM_FILR AND 
+        (DAT_HOR_INCU >= @DATABASE_START_DATE OR @DATABASE_START_DATE IS NULL) AND 
+        (DAT_HOR_INCU < @DATABASE_END_DATE OR @DATABASE_END_DATE IS NULL);
+
+    FETCH NEXT FROM fila_cursor INTO @CurrentNOM_FILR;
+END;
+
+CLOSE fila_cursor;
+DEALLOCATE fila_cursor;
+
+-- Agora as consultas subsequentes usarão #TBFR6002_CTRL_MSGR em vez de utilitario.TBFR6002_CTRL_MSGR
+
+-- Total registros
+SET @Total_vencimentoOperacaoRendaFixa = (SELECT COUNT(1)
+    FROM #TBFR6002_CTRL_MSGR TR
+    WHERE 
+        (TR.DAT_HOR_INCU >= @DATABASE_START_DATE OR @DATABASE_START_DATE IS NULL) AND 
+        (TR.DAT_HOR_INCU < @DATABASE_END_DATE OR @DATABASE_END_DATE IS NULL));
+
+-- Pendente de processamento
+SET @Total_pendente_processamento_VencimentoOperacaoRendaFixa = (SELECT COUNT(1)
+    FROM #TBFR6002_CTRL_MSGR PP
+    WHERE 
+        (PP.DAT_HOR_INCU >= @DATABASE_START_DATE OR @DATABASE_START_DATE IS NULL) AND 
+        (PP.DAT_HOR_INCU < @DATABASE_END_DATE OR @DATABASE_END_DATE IS NULL) AND
+        PP.DAT_HOR_PSST IS NULL AND
+        PP.DAT_HOR_ERRO IS NULL AND
+        PP.DAT_HOR_EXCU IS NULL);
+
+-- Processados com erro
+SET @Total_processados_com_erro_vencimentoOperacaoRendaFixa = (SELECT COUNT(1)
+    FROM #TBFR6002_CTRL_MSGR PP
+    WHERE 
+        (PP.DAT_HOR_INCU >= @DATABASE_START_DATE OR @DATABASE_START_DATE IS NULL) AND 
+        (PP.DAT_HOR_INCU < @DATABASE_END_DATE OR @DATABASE_END_DATE IS NULL) AND
+        PP.DAT_HOR_PSST IS NULL AND
+        PP.DAT_HOR_ERRO IS NOT NULL AND
+        PP.DAT_HOR_EXCU IS NULL);
+
+-- Select para agrupar todas as informações das filas
+INSERT INTO #MONITORACAO_FILAS_MSG
+SELECT 
+    'FR6.VencimentoOperacaoRendaFixa',
+    'Vencimento',
+    'RF',
+    ISNULL(@Total_vencimentoOperacaoRendaFixa, 0),
+    ISNULL(@Total_processado_sucesso_vencimentoOperacaoRendaFixa, 0),
+    ISNULL(@Total_pendente_processamento_VencimentoOperacaoRendaFixa, 0),
+    ISNULL(@Total_processados_com_erro_vencimentoOperacaoRendaFixa, 0),
+    1;
+
+-- Limpeza da tabela temporária
+DROP TABLE #TBFR6002_CTRL_MSGR;
+DROP TABLE #MONITORACAO_FILAS_MSG;
